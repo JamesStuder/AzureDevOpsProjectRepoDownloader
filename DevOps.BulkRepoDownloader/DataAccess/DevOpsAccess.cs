@@ -51,7 +51,10 @@ namespace DevOps.BulkRepoDownloader.DataAccess
                 foreach (JsonElement proj in jsonDoc.RootElement.GetProperty("value").EnumerateArray())
                 {
                     string? name = proj.GetProperty("name").GetString();
-                    if (!string.IsNullOrWhiteSpace(name)) projectNames.Add(name);
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        projectNames.Add(name);
+                    }
                 }
             }
             else
@@ -85,7 +88,10 @@ namespace DevOps.BulkRepoDownloader.DataAccess
                 foreach (JsonElement repo in jsonDoc.RootElement.GetProperty("value").EnumerateArray())
                 {
                     string? name = repo.GetProperty("name").GetString();
-                    if (name != null) repoNames.Add(name);
+                    if (name != null)
+                    {
+                        repoNames.Add(name);
+                    }
                 }
             }
             else

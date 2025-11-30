@@ -24,7 +24,10 @@ namespace DevOps.BulkRepoDownloader.DataAccess
         private static bool TryDecrypt(string text, out string? json)
         {
             json = null;
-            if (!text.StartsWith(EncryptionHeader)) return false;
+            if (!text.StartsWith(EncryptionHeader))
+            {
+                return false;
+            }
             string b64 = text.Substring(EncryptionHeader.Length).Trim();
             try
             {
@@ -75,10 +78,37 @@ namespace DevOps.BulkRepoDownloader.DataAccess
                     AllowTrailingCommas = true
                 });
                 config ??= new Config();
-                
+
+                bool needsSave = false;
+
+                // Migration: legacy single-org -> multi-org
+                if ((config.Orgs == null || config.Orgs.Count == 0) &&
+                    (!string.IsNullOrWhiteSpace(config.BaseUrl) || !string.IsNullOrWhiteSpace(config.PAT) || (config.Projects != null && config.Projects.Count > 0)))
+                {
+                    OrgConfig org = new()
+                    {
+                        BaseUrl = config.BaseUrl,
+                        PAT = config.PAT,
+                        Projects = config.Projects ?? new()
+                    };
+                    config.Orgs = new() { org };
+
+                    // Clear legacy fields after migration
+                    config.BaseUrl = null;
+                    config.PAT = null;
+                    config.Projects = new();
+                    needsSave = true;
+                }
+
+                // If the file was plaintext (no header), auto-migrate by saving encrypted.
                 if (!wasEncrypted)
                 {
-                    await SaveConfigAsync(path, config);
+                    needsSave = true;
+                }
+
+                if (needsSave)
+                {
+                    try { await SaveConfigAsync(path, config); } catch { /* best-effort */ }
                 }
 
                 return config;
