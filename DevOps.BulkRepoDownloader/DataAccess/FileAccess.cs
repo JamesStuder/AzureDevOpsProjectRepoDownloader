@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -19,37 +20,42 @@ namespace DevOps.BulkRepoDownloader.DataAccess
         /// Attempts to decrypt a given text that was previously encrypted with the DPAPI (Data Protection API) in the current user scope.
         /// </summary>
         /// <param name="text">The encrypted text that potentially begins with the specified encryption header.</param>
-        /// <param name="json">The output parameter that will contain the decrypted JSON string if decryption is successful.</param>
-        /// <returns>A boolean value indicating whether decryption was successful.</returns>
-        private static bool TryDecrypt(string text, out string? json)
+        /// <returns>The decrypted string if successful; otherwise, the original text.</returns>
+        public static string DecryptPAT(string? text)
         {
-            json = null;
-            if (!text.StartsWith(EncryptionHeader))
+            if (string.IsNullOrEmpty(text) || !text.StartsWith(EncryptionHeader))
             {
-                return false;
+                return text ?? string.Empty;
             }
             string b64 = text.Substring(EncryptionHeader.Length).Trim();
             try
             {
                 byte[] protectedBytes = Convert.FromBase64String(b64);
                 byte[] plainBytes = ProtectedData.Unprotect(protectedBytes, _entropy, DataProtectionScope.CurrentUser);
-                json = Encoding.UTF8.GetString(plainBytes);
-                return true;
+                return Encoding.UTF8.GetString(plainBytes);
             }
             catch
             {
-                return false;
+                return text;
             }
         }
 
         /// <summary>
-        /// Encrypts the provided JSON string using the DPAPI (Data Protection API) with the current user scope.
+        /// Encrypts the provided string using the DPAPI (Data Protection API) with the current user scope.
         /// </summary>
-        /// <param name="json">The JSON string to encrypt.</param>
+        /// <param name="text">The text to encrypt.</param>
         /// <returns>The encrypted string prefixed with the encryption header.</returns>
-        private static string Encrypt(string json)
+        public static string EncryptPAT(string? text)
         {
-            byte[] plainBytes = Encoding.UTF8.GetBytes(json);
+            if (string.IsNullOrEmpty(text))
+            {
+                return string.Empty;
+            }
+            if (text.StartsWith(EncryptionHeader))
+            {
+                return text;
+            }
+            byte[] plainBytes = Encoding.UTF8.GetBytes(text);
             byte[] protectedBytes = ProtectedData.Protect(plainBytes, _entropy, DataProtectionScope.CurrentUser);
             string b64 = Convert.ToBase64String(protectedBytes);
             return EncryptionHeader + b64;
@@ -66,11 +72,8 @@ namespace DevOps.BulkRepoDownloader.DataAccess
             {
                 string fileText = await File.ReadAllTextAsync(path);
                 string json = fileText;
-                bool wasEncrypted = TryDecrypt(fileText, out string? decrypted);
-                if (wasEncrypted)
-                {
-                    json = decrypted!;
-                }
+                
+
                 Config? config = JsonSerializer.Deserialize<Config>(json, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = false,
@@ -78,38 +81,15 @@ namespace DevOps.BulkRepoDownloader.DataAccess
                     AllowTrailingCommas = true
                 });
                 config ??= new Config();
-
-                bool needsSave = false;
-
-                // Migration: legacy single-org -> multi-org
-                if ((config.Orgs == null || config.Orgs.Count == 0) &&
-                    (!string.IsNullOrWhiteSpace(config.BaseUrl) || !string.IsNullOrWhiteSpace(config.PAT) || (config.Projects != null && config.Projects.Count > 0)))
+                
+                if (config.Orgs != null)
                 {
-                    OrgConfig org = new()
+                    foreach (OrgConfig org in config.Orgs)
                     {
-                        BaseUrl = config.BaseUrl,
-                        PAT = config.PAT,
-                        Projects = config.Projects ?? new()
-                    };
-                    config.Orgs = new() { org };
-
-                    // Clear legacy fields after migration
-                    config.BaseUrl = null;
-                    config.PAT = null;
-                    config.Projects = new();
-                    needsSave = true;
+                        org.PAT = DecryptPAT(org.PAT);
+                    }
                 }
 
-                // If the file was plaintext (no header), auto-migrate by saving encrypted.
-                if (!wasEncrypted)
-                {
-                    needsSave = true;
-                }
-
-                if (needsSave)
-                {
-                    try { await SaveConfigAsync(path, config); } catch { /* best-effort */ }
-                }
 
                 return config;
             }
@@ -127,13 +107,31 @@ namespace DevOps.BulkRepoDownloader.DataAccess
         /// <returns>A task that represents the asynchronous save operation.</returns>
         public async Task SaveConfigAsync(string path, Config config)
         {
+            // Encrypt PATs before saving
+            if (config.Orgs != null)
+            {
+                foreach (OrgConfig org in config.Orgs)
+                {
+                    org.PAT = EncryptPAT(org.PAT);
+                }
+            }
+
             string json = JsonSerializer.Serialize(config, new JsonSerializerOptions
             {
                 WriteIndented = true,
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
             });
-            string encrypted = Encrypt(json);
-            await File.WriteAllTextAsync(path, encrypted);
+
+            await File.WriteAllTextAsync(path, json);
+
+            // Decrypt back in memory so the app can continue using them
+            if (config.Orgs != null)
+            {
+                foreach (OrgConfig org in config.Orgs)
+                {
+                    org.PAT = DecryptPAT(org.PAT);
+                }
+            }
         }
     }
 }

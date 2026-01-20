@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using DevOps.BulkRepoDownloader.Services;
 
 namespace DevOps.BulkRepoDownloader.DataAccess
 {
@@ -12,6 +13,7 @@ namespace DevOps.BulkRepoDownloader.DataAccess
     {
         private static readonly HttpClient _httpClient = new ();
         private static readonly MediaTypeWithQualityHeaderValue _jsonMediaType = new("application/json");
+        private readonly ConsoleService _consoleService = new();
 
         /// <summary>
         /// Creates an HTTP GET request with the appropriate headers for accessing the Azure DevOps API.
@@ -59,7 +61,7 @@ namespace DevOps.BulkRepoDownloader.DataAccess
             }
             else
             {
-                Console.WriteLine($"Failed to retrieve projects: {response.ReasonPhrase}");
+                _consoleService.WriteError($"Failed to retrieve projects: ({response.ReasonPhrase})");
             }
 
             return projectNames;
@@ -96,7 +98,7 @@ namespace DevOps.BulkRepoDownloader.DataAccess
             }
             else
             {
-                Console.WriteLine($"Failed to retrieve repositories: {response.ReasonPhrase}");
+                _consoleService.WriteError($"Failed to retrieve repositories: ({response.ReasonPhrase})");
             }
 
             return repoNames;

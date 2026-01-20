@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Text.Json;
 using DevOps.BulkRepoDownloader.DataAccess;
 using DevOps.BulkRepoDownloader.Models;
+using DevOps.BulkRepoDownloader.Services;
 using FileAccess = DevOps.BulkRepoDownloader.DataAccess.FileAccess;
 
 
@@ -18,6 +19,9 @@ namespace DevOps.BulkRepoDownloader
         private static DevOpsAccess? _DevOpsAccess;
         private static FileAccess? _FileAccess;
         private static RepoAccess? _RepoAccess;
+        private static ConsoleService _ConsoleService = new();
+
+        private static bool _SkipQuestions;
 
         /// <summary>
         /// Entry point for the application that manages the bulk cloning and pulling of repositories
@@ -31,7 +35,13 @@ namespace DevOps.BulkRepoDownloader
         /// <exception cref="InvalidOperationException">Thrown when the configuration file is missing required fields.</exception>
         private static async Task Main(string[] args)
         {
-            _ConfigPath = Path.Combine(AppContext.BaseDirectory, _DefaultConfigFileName);
+            _SkipQuestions = args.Length > 0 && (args[0] == "--skip-questions" || args[0] == "-s");
+
+            string appDataPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DevOps.BulkRepoDownloader");
+            Directory.CreateDirectory(appDataPath);
+            _ConfigPath = Path.Combine(appDataPath, _DefaultConfigFileName);
+
+
             _Config = new Config();
             _DevOpsAccess = new DevOpsAccess();
             _FileAccess = new FileAccess();
@@ -39,35 +49,37 @@ namespace DevOps.BulkRepoDownloader
 
             if (File.Exists(_ConfigPath))
             {
-                Console.WriteLine($"Loading configuration from {_ConfigPath}...");
+                _ConsoleService.WriteInfo($"Loading configuration from {_ConfigPath}...");
                 _Config = await _FileAccess.LoadConfigAsync(_ConfigPath);
          
                 if (string.IsNullOrWhiteSpace(_Config.RepoRootLocation) || _Config.Orgs.Count == 0)
                 {
-                    Console.WriteLine("Configuration file is missing required fields. Reinitializing...");
+                    if (_SkipQuestions)
+                    {
+                        _ConsoleService.WriteError("Configuration file is missing required fields and --skip-questions is set. Exiting.");
+                        return;
+                    }
+                    _ConsoleService.WriteInfo("Configuration file is missing required fields. Reinitializing...");
                     _Config = await InitializeConfigInteractiveAsync(_ConfigPath);
                 }
                 else
                 {
-                    await RefreshProjectsIfChangedAsync(_Config);
+                    if (!_SkipQuestions)
+                    {
+                        await RefreshProjectsIfChangedAsync(_Config);
+                    }
                 }
             }
             else
             {
+                if (_SkipQuestions)
+                {
+                    _ConsoleService.WriteError("Configuration file does not exist and --skip-questions is set. Exiting.");
+                    return;
+                }
                 _Config = await InitializeConfigInteractiveAsync(_ConfigPath);
             }
             
-            bool? showJson = await AskYesNoWithTimeoutAsync(
-                "Would you like to display the current configuration JSON for copying? (y/n) [auto-skip in 10s]: ",
-                TimeSpan.FromSeconds(10));
-            if (showJson == true)
-            {
-                Console.WriteLine();
-                Console.WriteLine("===== Current Configuration (copyable JSON) =====");
-                Console.WriteLine(SerializeConfig(_Config!));
-                Console.WriteLine("===== End Configuration =====");
-                Console.WriteLine();
-            }
             
             bool useOrgFolder = _Config.Orgs.Count > 1;
 
@@ -97,25 +109,34 @@ namespace DevOps.BulkRepoDownloader
                         string cloneUrl = $"{baseUrl}/{encodedProject}/_git/{encodedRepo}";
                         string repoPath = Path.Combine(projectDir, repoName);
 
-                        Console.WriteLine($"Processing repository: {project.Name}/{repoName}");
+                        _ConsoleService.WriteInfo($"Processing repository: {project.Name}/{repoName}");
 
                         if (Directory.Exists(Path.Combine(repoPath, ".git")))
                         {
-                            Console.WriteLine($"Repository {repoName} already exists. Pulling latest changes...");
-                            _RepoAccess.PullRepository(repoPath, org.PAT);
+                            _ConsoleService.WriteInfo($"Repository {repoName} already exists. Pulling latest changes...");
+                            _RepoAccess!.PullRepository(repoPath, org.PAT);
                         }
                         else if (Directory.Exists(repoPath))
                         {
-                            Console.WriteLine($"Directory exists but not a git repository. Attempting to clone anyway...");
-                            _RepoAccess.CloneRepository(cloneUrl, repoPath, org.PAT);
+                            _ConsoleService.WriteInfo($"Directory exists but not a git repository. Attempting to clone anyway...");
+                            _RepoAccess!.CloneRepository(cloneUrl, repoPath, org.PAT);
                         }
                         else
                         {
-                            Console.WriteLine($"Cloning repository {repoName} from {cloneUrl}...");
-                            _RepoAccess.CloneRepository(cloneUrl, repoPath, org.PAT);
+                            _ConsoleService.WriteInfo($"Cloning repository {repoName} from {cloneUrl}...");
+                            _RepoAccess!.CloneRepository(cloneUrl, repoPath, org.PAT);
                         }
                     }
                 }
+            }
+
+            _ConsoleService.WriteSuccess("All repositories processed successfully.");
+
+            if (!_SkipQuestions)
+            {
+                _ConsoleService.WriteInfo("");
+                _ConsoleService.WriteInfo("Press any key to exit...");
+                Console.ReadKey();
             }
         }
 
@@ -127,7 +148,7 @@ namespace DevOps.BulkRepoDownloader
         /// <param name="configPath">The file path where the configuration will be saved.</param>
         /// <returns>A task that resolves to the created <see cref="Config"/> object containing the user's input.</returns>
         /// <exception cref="InvalidOperationException">
-        /// Thrown when the required input for the repository root location is not provided by the user.
+        /// Thrown when the user does not provide the required input for the repository root location.
         /// </exception>
         private static async Task<Config> InitializeConfigInteractiveAsync(string configPath)
         {
@@ -160,7 +181,7 @@ namespace DevOps.BulkRepoDownloader
         /// <summary>
         /// Collects configuration details for an Azure DevOps organization, including its base URL,
         /// Personal Access Token (PAT), and the list of projects and their associated repositories.
-        /// The method prompts the user for input and performs the necessary API calls to retrieve
+        /// The method prompts the user to input and perform the necessary API calls to retrieve
         /// project and repository information.
         /// </summary>
         /// <returns>An <see cref="OrgConfig"/> object containing the organization's base URL, PAT,
@@ -182,18 +203,16 @@ namespace DevOps.BulkRepoDownloader
             // Fetch projects
             List<string> allProjects = await _DevOpsAccess!.GetProjectsAsync(normalizedBase, patToken);
             List<string> selectedProjects;
-            bool? all = await AskYesNoWithTimeoutAsync("Include ALL projects from this organization? (y/n) [auto-skip in 10s]: ", TimeSpan.FromSeconds(10));
-            if (all == null || all == true)
+            bool? all = await AskYesNoWithTimeoutAsync("Include ALL projects from this organization? (y/n): ", TimeSpan.FromSeconds(10));
+            if (all == true)
             {
-                // New file and no answer within timeout -> include all
                 selectedProjects = allProjects;
             }
             else
             {
-                // Allow 10s to filter; if no input, default to ALL
                 selectedProjects = await PromptSelectManyWithTimeoutAsync(
                     allProjects,
-                    "Select projects by number (e.g., 1,3-5) [auto-skip in 10s keeps ALL]: ",
+                    "Select projects by number (e.g., 1,3-5): ",
                     TimeSpan.FromSeconds(10),
                     preselected: null,
                     defaultOnTimeout: allProjects
@@ -242,17 +261,16 @@ namespace DevOps.BulkRepoDownloader
                     continue;
                 }
 
-                bool? change = await AskYesNoWithTimeoutAsync($"Projects changed for org '{GetOrgFolderName(org.BaseUrl)}'. Do you want to update the selection? (y/n) [auto-skip in 10s keeps current]: ", TimeSpan.FromSeconds(10));
+                bool? change = await AskYesNoWithTimeoutAsync($"Projects changed for org '{GetOrgFolderName(org.BaseUrl)}'. Do you want to update the selection? (y/n): ", TimeSpan.FromSeconds(10));
                 if (change != true)
                 {
                     continue;
                 }
 
-                // Give 10s to adjust selection; on timeout keep currently selected ones
                 List<string> defaultKeep = new List<string>(storedSet);
                 List<string> selected = await PromptSelectManyWithTimeoutAsync(
                     current,
-                    "Select projects by number (e.g., 1,3-5) [auto-skip in 10s keeps current]: ",
+                    "Select projects by number (e.g., 1,3-5): ",
                     TimeSpan.FromSeconds(10),
                     preselected: storedSet,
                     defaultOnTimeout: defaultKeep
@@ -310,27 +328,19 @@ namespace DevOps.BulkRepoDownloader
         }
 
         /// <summary>
-        /// Prompts the user with a yes/no question and waits for a response. If the user does not respond
-        /// within the specified timeout, the method automatically skips the prompt and returns null.
+        /// Prompts the user with a yes/no question and waits for a response.
         /// </summary>
         /// <param name="prompt">The message displayed to the user, requesting a yes/no response.</param>
-        /// <param name="timeout">The duration to wait for user input before skipping the prompt.</param>
+        /// <param name="timeout">Obsolete: The duration to wait for user input. No longer used as auto-move is removed.</param>
         /// <returns>
         /// A nullable boolean value indicating the user's response: true for "yes", false for "no", and
-        /// null if no input was provided within the timeout period or if an invalid response was entered.
+        /// null if an invalid response was entered.
         /// </returns>
         private static async Task<bool?> AskYesNoWithTimeoutAsync(string prompt, TimeSpan timeout)
         {
             Console.Write(prompt);
-            Task<string?> inputTask = Task.Run(Console.ReadLine);
-            Task completed = await Task.WhenAny(inputTask, Task.Delay(timeout));
-            if (completed != inputTask)
-            {
-                Console.WriteLine();
-                return null;
-            }
+            string? input = await Task.Run(Console.ReadLine);
 
-            string? input = inputTask.Result;
             if (string.IsNullOrWhiteSpace(input))
             {
                 return null;
@@ -344,19 +354,6 @@ namespace DevOps.BulkRepoDownloader
             };
         }
 
-        /// <summary>
-        /// Converts the configuration object into a JSON string representation.
-        /// The resulting JSON string is indented for readability.
-        /// </summary>
-        /// <param name="cfg">The configuration object to be serialized.</param>
-        /// <returns>A string containing the JSON representation of the configuration object.</returns>
-        private static string SerializeConfig(Config cfg)
-        {
-            return JsonSerializer.Serialize(cfg, new JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
-        }
 
         /// <summary>
         /// Prompts the user to select multiple items from a list by entering their corresponding indices or ranges.
@@ -367,9 +364,8 @@ namespace DevOps.BulkRepoDownloader
         /// <param name="preselected">A set of items that should be marked as preselected, or null if none are preselected.</param>
         /// <returns>A list of items selected by the user based on their input.</returns>
         /// <exception cref="FormatException">Thrown if the user's input cannot be correctly parsed into valid indices or ranges.</exception>
-        /// <exception cref="ArgumentOutOfRangeException">Thrown if the user's input references indices outside the valid range of items.</exception>
-        private static List<string> PromptSelectMany(List<string> items, string prompt,
-            HashSet<string>? preselected = null)
+        /// <exception cref="ArgumentOutOfRangeException">Thrown if the user's input references are outside the valid range of items.</exception>
+        private static List<string> PromptSelectMany(List<string> items, string prompt, HashSet<string>? preselected = null)
         {
             for (int i = 0; i < items.Count; i++)
             {
@@ -402,7 +398,7 @@ namespace DevOps.BulkRepoDownloader
         }
 
         /// <summary>
-        /// Like PromptSelectMany but with a timeout that returns a default selection if no input is provided in time.
+        /// Like PromptSelectMany but waits for input without a timeout.
         /// </summary>
         private static async Task<List<string>> PromptSelectManyWithTimeoutAsync(
             List<string> items,
@@ -419,15 +415,8 @@ namespace DevOps.BulkRepoDownloader
             while (true)
             {
                 Console.Write(prompt);
-                Task<string?> inputTask = Task.Run(Console.ReadLine);
-                Task completed = await Task.WhenAny(inputTask, Task.Delay(timeout));
-                if (completed != inputTask)
-                {
-                    Console.WriteLine();
-                    return defaultOnTimeout ?? new List<string>();
-                }
+                string? input = await Task.Run(Console.ReadLine);
 
-                string? input = inputTask.Result;
                 if (string.IsNullOrWhiteSpace(input))
                 {
                     return defaultOnTimeout ?? new List<string>();
@@ -450,7 +439,7 @@ namespace DevOps.BulkRepoDownloader
         }
 
         /// <summary>
-        /// Parses a string input that represents selected indices or ranges of indices, and converts it into
+        /// Parses a string input that represents selected indices or ranges of indices and converts it into
         /// a set of zero-based integers representing valid selections within the specified range.
         /// </summary>
         /// <param name="input">A comma-separated string containing individual indices or ranges specified as "start-end".</param>
