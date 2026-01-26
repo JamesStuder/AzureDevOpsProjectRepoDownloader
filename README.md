@@ -9,9 +9,18 @@ Bulk‑clone or pull all repositories across your Azure DevOps projects. On late
 - Persists connection details and discovered projects/repos to a config file
 - Encrypts sensitive Personal Access Tokens (PATs) using Windows DPAPI (CurrentUser scope) while keeping the rest of the config as readable JSON
 
+## Installation
+You can install the tool via [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/):
+
+```powershell
+winget install DevOps.BulkRepoDownloader
+```
+
+The package is installed to: `%LocalAppData%\Microsoft\WinGet\Packages\DevOps.BulkRepoDownloader_Microsoft`
+
 ## Prerequisites
 - Windows (DPAPI CurrentUser is used for encryption)
-- .NET 8 SDK
+- .NET 8 SDK (only required if building from source)
 - An Azure DevOps Personal Access Token (PAT) with at least Code (Read) access
 
 ## Build
@@ -24,7 +33,7 @@ Bulk‑clone or pull all repositories across your Azure DevOps projects. On late
 
 ## Run (first time)
 On the first run, there is no config, so the app will prompt you and then automatically discover projects and repos:
-1. Start the app (from IDE or `dotnet run` in `DevOps.BulkRepoDownloader`)
+1. Start the app (via Start Menu if installed via Winget, or from IDE / `dotnet run` in `DevOps.BulkRepoDownloader`)
 2. Answer prompts:
    - Azure DevOps organization URL (e.g., `https://dev.azure.com/your_org`)
    - PAT

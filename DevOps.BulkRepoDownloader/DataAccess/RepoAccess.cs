@@ -53,6 +53,21 @@ namespace DevOps.BulkRepoDownloader.DataAccess
                 using Repository repo = new (repoPath);
                 
                 FetchAllBranches(repo, patToken);
+
+                if (repo.Head.TrackedBranch == null)
+                {
+                    _consoleService.WriteInfo($"Setting up tracking for branch {repo.Head.FriendlyName}...");
+                    Branch? remoteBranch = repo.Branches[$"origin/{repo.Head.FriendlyName}"];
+                    if (remoteBranch != null)
+                    {
+                        repo.Branches.Update(repo.Head, b => b.Remote = "origin", b => b.UpstreamBranch = remoteBranch.CanonicalName);
+                    }
+                    else
+                    {
+                        _consoleService.WriteError($"Could not find remote branch for {repo.Head.FriendlyName} to set up tracking.");
+                        return;
+                    }
+                }
                 
                 PullOptions options = new ()
                 {
@@ -78,7 +93,10 @@ namespace DevOps.BulkRepoDownloader.DataAccess
         private void FetchAllBranches(Repository repo, string? patToken)
         {
             Remote? remote = repo.Network.Remotes["origin"];
-            var refSpecs = remote.FetchRefSpecs.Select(x => x.Specification);
+            
+            // Standard refspec to fetch all branches
+            string[] refSpecs = ["+refs/heads/*:refs/remotes/origin/*"];
+            
             Commands.Fetch(repo, remote.Name, refSpecs, new FetchOptions
             {
                 CredentialsProvider = (_url, _user, _cred) => new UsernamePasswordCredentials { Username = "pat", Password = patToken }
@@ -86,6 +104,11 @@ namespace DevOps.BulkRepoDownloader.DataAccess
 
             foreach (Branch? remoteBranch in repo.Branches.Where(b => b.IsRemote && b.RemoteName == "origin"))
             {
+                if (remoteBranch.FriendlyName == "origin/HEAD")
+                {
+                    continue;
+                }
+                
                 string localBranchName = remoteBranch.FriendlyName.Replace("origin/", "");
                 Branch? localBranch = repo.Branches[localBranchName];
 

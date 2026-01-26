@@ -5,8 +5,8 @@
         <TargetFramework>net8.0</TargetFramework>
         <ImplicitUsings>disable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <AssemblyVersion>2026.01.20.01</AssemblyVersion>
-        <FileVersion>2026.01.20.01</FileVersion>
+        <AssemblyVersion>2026.01.26.01</AssemblyVersion>
+        <FileVersion>2026.01.26.01</FileVersion>
         <NeutralLanguage>en-US</NeutralLanguage>
     </PropertyGroup>
 
